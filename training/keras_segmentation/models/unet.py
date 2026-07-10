@@ -1,5 +1,14 @@
-from keras.models import *
-from keras.layers import *
+from keras.layers import (
+    Activation,
+    BatchNormalization,
+    Conv2D,
+    Dropout,
+    Input,
+    MaxPooling2D,
+    UpSampling2D,
+    ZeroPadding2D,
+    concatenate,
+)
 
 from .config import IMAGE_ORDERING
 from .model_utils import get_segmentation_model
@@ -142,7 +151,10 @@ def mobilenet_unet(n_classes, input_height=224, input_width=224,
     return model
 
 def custom_unet(n_classes ,input_height, input_width):
-    img_input, levels = vanilla_encoder2()
+    img_input, levels = vanilla_encoder2(
+        input_height=input_height,
+        input_width=input_width,
+    )
 
     o = levels[-1]
     o = Conv2D(1024, (3,3), padding='same', activation='relu', data_format=IMAGE_ORDERING)(o)
@@ -187,7 +199,7 @@ def custom_unet(n_classes ,input_height, input_width):
     o = Conv2D(n_classes, (3, 3), padding='same', data_format=IMAGE_ORDERING)(o)
 
     model = get_segmentation_model(img_input, o)
-
+    model.model_name = "custom_unet"
     return model
 
 if __name__ == '__main__':

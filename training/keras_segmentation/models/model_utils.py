@@ -1,8 +1,8 @@
 from types import MethodType
 
-from keras.models import *
-from keras.layers import *
 import keras.backend as K
+from keras.layers import Activation, Lambda, Permute, Reshape
+from keras.models import Model
 from tqdm import tqdm
 
 from .config import IMAGE_ORDERING

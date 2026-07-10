@@ -1,5 +1,4 @@
-from keras.models import *
-from keras.layers import *
+from keras.layers import BatchNormalization, Conv2D, UpSampling2D, ZeroPadding2D
 
 from .config import IMAGE_ORDERING
 from .model_utils import get_segmentation_model

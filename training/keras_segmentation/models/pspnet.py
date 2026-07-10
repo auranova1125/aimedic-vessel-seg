@@ -1,8 +1,6 @@
 import numpy as np
-import keras
-from keras.models import *
-from keras.layers import *
 import keras.backend as K
+from keras.layers import Activation, AveragePooling2D, BatchNormalization, Concatenate, Conv2D
 
 from .config import IMAGE_ORDERING
 from .model_utils import get_segmentation_model, resize_image

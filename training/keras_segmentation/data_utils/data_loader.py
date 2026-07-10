@@ -1,218 +1,286 @@
+"""Dataset pairing, validation, and batch generation for segmentation models."""
+
+from __future__ import annotations
+
 import itertools
-import os
+from pathlib import Path
 import random
-import six
-import numpy as np
+
 import cv2
+import numpy as np
+import six
 
 try:
     from tqdm import tqdm
 except ImportError:
-    print("tqdm not found, disabling progress bars")
 
-    def tqdm(iter):
-        return iter
+    def tqdm(iterable):
+        """Return the iterable unchanged when tqdm is unavailable."""
+        return iterable
 
 
 from ..models.config import IMAGE_ORDERING
 from .augmentation import augment_seg
 
+
+CLASS_COLORS = [(0, 0, 0), (0, 0, 255), (255, 0, 0), (0, 255, 0)]
 DATA_LOADER_SEED = 1
+SUPPORTED_IMAGE_EXTENSIONS = {".bmp", ".jpeg", ".jpg", ".png"}
 
 random.seed(DATA_LOADER_SEED)
-class_colors = [(0,0,0),(0,0,255),(255,0,0),(0,255,0)]
 
 
 class DataLoaderError(Exception):
-    pass
+    """Raised when image and segmentation data cannot be used safely."""
 
 
-def get_pairs_from_paths(images_path, segs_path, ignore_non_matching=False):
-    """ Find all the images from the images_path directory and
-        the segmentation images from the segs_path directory
-        while checking integrity of data """
+def _files_by_stem(directory: str, file_role: str) -> dict[str, Path]:
+    """Index supported files by stem and reject ambiguous duplicates."""
+    directory_path = Path(directory)
+    if not directory_path.is_dir():
+        raise DataLoaderError(f"Missing {file_role} directory: {directory_path}")
 
-    ACCEPTABLE_IMAGE_FORMATS = [".jpg", ".jpeg", ".png", ".bmp"]
-    ACCEPTABLE_SEGMENTATION_FORMATS = [".jpg", ".png", ".bmp"]
-
-    image_files = []
-    segmentation_files = {}
-
-    for dir_entry in os.listdir(images_path):
-        if os.path.isfile(os.path.join(images_path, dir_entry)) and \
-                os.path.splitext(dir_entry)[1] in ACCEPTABLE_IMAGE_FORMATS:
-            file_name, file_extension = os.path.splitext(dir_entry)
-            image_files.append((file_name, file_extension,
-                                os.path.join(images_path, dir_entry)))
-
-    for dir_entry in os.listdir(segs_path):
-        if os.path.isfile(os.path.join(segs_path, dir_entry)) and \
-           os.path.splitext(dir_entry)[1] in ACCEPTABLE_SEGMENTATION_FORMATS:
-            file_name, file_extension = os.path.splitext(dir_entry)
-            full_dir_entry = os.path.join(segs_path, dir_entry)
-            if file_name in segmentation_files:
-                raise DataLoaderError("Segmentation file with filename {0}"
-                                      " already exists and is ambiguous to"
-                                      " resolve with path {1}."
-                                      " Please remove or rename the latter."
-                                      .format(file_name, full_dir_entry))
-
-            segmentation_files[file_name] = (file_extension, full_dir_entry)
-
-    return_value = []
-    # Match the images and segmentations
-    for image_file, _, image_full_path in image_files:
-        if image_file in segmentation_files:
-            return_value.append((image_full_path,
-                                segmentation_files[image_file][1]))
-        elif ignore_non_matching:
+    files_by_stem: dict[str, Path] = {}
+    for file_path in sorted(directory_path.iterdir()):
+        if not file_path.is_file() or file_path.suffix.lower() not in SUPPORTED_IMAGE_EXTENSIONS:
             continue
-        else:
-            # Error out
-            raise DataLoaderError("No corresponding segmentation "
-                                  "found for image {0}."
-                                  .format(image_full_path))
 
-    return return_value
+        if file_path.stem in files_by_stem:
+            existing_path = files_by_stem[file_path.stem]
+            raise DataLoaderError(
+                f"Duplicate {file_role} filename stem '{file_path.stem}': "
+                f"{existing_path.name}, {file_path.name}"
+            )
+        files_by_stem[file_path.stem] = file_path
+
+    return files_by_stem
 
 
-def get_image_array(image_input,
-                    width, height,
-                    imgNorm="sub_mean", ordering='channels_first'):
-    """ Load image array from input """
+def _format_stems(stems: set[str]) -> str:
+    """Format a deterministic, compact list of filename stems for errors."""
+    return ", ".join(sorted(stems))
 
-    if type(image_input) is np.ndarray:
-        # It is already an array, use it as it is
-        img = image_input
+
+def get_class_colors(
+    n_classes: int, colors: list[tuple[int, int, int]] = CLASS_COLORS
+) -> list[tuple[int, int, int]]:
+    """Return enough deterministic BGR colors to visualize every class."""
+    resolved_colors = list(colors[:n_classes])
+    for class_index in range(len(resolved_colors), n_classes):
+        hue = int((class_index * 179) / max(n_classes, 1))
+        hsv_color = np.uint8([[[hue, 200, 255]]])
+        bgr_color = cv2.cvtColor(hsv_color, cv2.COLOR_HSV2BGR)[0, 0]
+        resolved_colors.append(tuple(int(value) for value in bgr_color))
+    return resolved_colors
+
+
+def _load_bgr_image(image_input: np.ndarray | str) -> np.ndarray:
+    """Load an array or a path and return a three-channel BGR image."""
+    if isinstance(image_input, np.ndarray):
+        image = image_input
     elif isinstance(image_input, six.string_types):
-        if not os.path.isfile(image_input):
-            raise DataLoaderError("get_image_array: path {0} doesn't exist"
-                                  .format(image_input))
-        img = cv2.imread(image_input, 1)
+        image = cv2.imread(image_input, cv2.IMREAD_UNCHANGED)
+        if image is None:
+            raise DataLoaderError(f"Could not read image: {image_input}")
     else:
-        raise DataLoaderError("get_image_array: Can't process input type {0}"
-                              .format(str(type(image_input))))
+        raise DataLoaderError(f"Unsupported image input type: {type(image_input)}")
 
-    if imgNorm == "sub_and_divide":
-        img = np.float32(cv2.resize(img, (width, height))) / 127.5 - 1
-    elif imgNorm == "sub_mean":
-        img = cv2.resize(img, (width, height))
-        img = img.astype(np.float32)
-        img[:, :, 0] -= 103.939
-        img[:, :, 1] -= 116.779
-        img[:, :, 2] -= 123.68
-        img = img[:, :, ::-1]
-    elif imgNorm == "divide":
-        img = cv2.resize(img, (width, height))
-        img = img.astype(np.float32)
-        img = img/255.0
-
-    if ordering == 'channels_first':
-        img = np.rollaxis(img, 2, 0)
-    return img
+    if image.ndim == 2:
+        return cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+    if image.ndim != 3:
+        raise DataLoaderError(f"Expected a 2D or 3D image, received shape {image.shape}")
+    if image.shape[2] == 3:
+        return image
+    if image.shape[2] == 4:
+        return cv2.cvtColor(image, cv2.COLOR_BGRA2BGR)
+    raise DataLoaderError(f"Expected one, three, or four image channels, received {image.shape[2]}")
 
 
-def get_segmentation_array(image_input, nClasses,
-                           width, height, no_reshape=False):
-    """ Load segmentation array from input """
-
-    seg_labels = np.zeros((height, width, nClasses))
-
-    if type(image_input) is np.ndarray:
-        # It is already an array, use it as it is
-        img = image_input
-    elif isinstance(image_input, six.string_types):
-        if not os.path.isfile(image_input):
-            raise DataLoaderError("get_segmentation_array: "
-                                  "path {0} doesn't exist".format(image_input))
-        img = cv2.imread(image_input, 1)
+def _load_mask(mask_input: np.ndarray | str) -> np.ndarray:
+    """Load an array or a path and return a single-channel class-index mask."""
+    if isinstance(mask_input, np.ndarray):
+        mask = mask_input
+    elif isinstance(mask_input, six.string_types):
+        mask = cv2.imread(mask_input, cv2.IMREAD_GRAYSCALE)
+        if mask is None:
+            raise DataLoaderError(f"Could not read segmentation mask: {mask_input}")
     else:
-        raise DataLoaderError("get_segmentation_array: "
-                              "Can't process input type {0}"
-                              .format(str(type(image_input))))
+        raise DataLoaderError(f"Unsupported segmentation input type: {type(mask_input)}")
 
-    img = cv2.resize(img, (width, height), interpolation=cv2.INTER_NEAREST)
-    img = img[:, :, 0]
-
-    for c in range(nClasses):
-        seg_labels[:, :, c] = (img == c).astype(int)
-
-    if not no_reshape:
-        seg_labels = np.reshape(seg_labels, (width*height, nClasses))
-
-    return seg_labels
+    if mask.ndim == 2:
+        return mask
+    if mask.ndim == 3:
+        return mask[:, :, 0]
+    raise DataLoaderError(f"Expected a 2D or 3D segmentation mask, received shape {mask.shape}")
 
 
-def verify_segmentation_dataset(images_path, segs_path,
-                                n_classes, show_all_errors=False):
-    try:
-        img_seg_pairs = get_pairs_from_paths(images_path, segs_path)
-        if not len(img_seg_pairs):
-            print("Couldn't load any data from images_path: "
-                  "{0} and segmentations path: {1}"
-                  .format(images_path, segs_path))
-            return False
+def get_pairs_from_paths(
+    images_path: str,
+    segs_path: str,
+    ignore_non_matching: bool = False,
+) -> list[tuple[str, str]]:
+    """Match input images and masks by filename stem.
 
-        return_value = True
-        for im_fn, seg_fn in tqdm(img_seg_pairs):
-            img = cv2.imread(im_fn)
-            max_val = np.max(img)
-            img = (img/max_val*255).astype(np.uint8)
-            seg = cv2.imread(seg_fn)
-            # Check dimensions match
-            if not img.shape == seg.shape:
-                return_value = False
-                print("The size of image {0} and its segmentation {1} "
-                      "doesn't match (possibly the files are corrupt)."
-                      .format(im_fn, seg_fn))
-                if not show_all_errors:
-                    break
-            else:
-                max_pixel_value = np.max(seg[:, :, 0])
-                if max_pixel_value >= n_classes:
-                    return_value = False
-                    print("The pixel values of the segmentation image {0} "
-                          "violating range [0, {1}]. "
-                          "Found maximum pixel value {2}"
-                          .format(seg_fn, str(n_classes - 1), max_pixel_value))
-                    if not show_all_errors:
-                        break
-        if return_value:
-            print("Dataset verified! ")
-        else:
-            print("Dataset not verified!")
-        return return_value
-    except DataLoaderError as e:
-        print("Found error during data loading\n{0}".format(str(e)))
-        return False
+    Strict matching is the default because an omitted image or an unused mask
+    otherwise makes the training set difficult to audit.
+    """
+    image_files = _files_by_stem(images_path, "image")
+    segmentation_files = _files_by_stem(segs_path, "segmentation")
+
+    image_stems = set(image_files)
+    segmentation_stems = set(segmentation_files)
+    unmatched_images = image_stems - segmentation_stems
+    unmatched_segmentations = segmentation_stems - image_stems
+
+    if not ignore_non_matching and (unmatched_images or unmatched_segmentations):
+        details = []
+        if unmatched_images:
+            details.append(f"images without masks: {_format_stems(unmatched_images)}")
+        if unmatched_segmentations:
+            details.append(f"masks without images: {_format_stems(unmatched_segmentations)}")
+        raise DataLoaderError(f"Image-mask filename mismatch: {'; '.join(details)}")
+
+    matched_stems = sorted(image_stems & segmentation_stems)
+    return [(str(image_files[stem]), str(segmentation_files[stem])) for stem in matched_stems]
 
 
-def image_segmentation_generator(images_path, segs_path, batch_size,
-                                 n_classes, input_height, input_width,
-                                 output_height, output_width,
-                                 do_augment=False,
-                                 augmentation_name="aug_all"):
+def get_image_array(
+    image_input: np.ndarray | str,
+    width: int,
+    height: int,
+    img_norm: str = "sub_mean",
+    ordering: str = "channels_first",
+    image_preprocessor=None,
+) -> np.ndarray:
+    """Load, resize, optionally preprocess, normalize, and order an image."""
+    image = _load_bgr_image(image_input)
+    image = cv2.resize(image, (width, height))
 
-    img_seg_pairs = get_pairs_from_paths(images_path, segs_path)
-    random.shuffle(img_seg_pairs)
-    zipped = itertools.cycle(img_seg_pairs)
+    if image_preprocessor is not None:
+        image = image_preprocessor(image)
+
+    if img_norm == "sub_and_divide":
+        image = np.float32(image) / 127.5 - 1
+    elif img_norm == "sub_mean":
+        image = image.astype(np.float32)
+        image[:, :, 0] -= 103.939
+        image[:, :, 1] -= 116.779
+        image[:, :, 2] -= 123.68
+        image = image[:, :, ::-1]
+    elif img_norm == "divide":
+        image = image.astype(np.float32) / 255.0
+    else:
+        raise DataLoaderError(f"Unsupported image normalization: {img_norm}")
+
+    if ordering == "channels_first":
+        image = np.rollaxis(image, 2, 0)
+    return image
+
+
+def get_segmentation_array(
+    image_input: np.ndarray | str,
+    n_classes: int,
+    width: int,
+    height: int,
+    no_reshape: bool = False,
+) -> np.ndarray:
+    """Load a class-index mask and convert it into a one-hot array."""
+    mask = _load_mask(image_input)
+    mask = cv2.resize(mask, (width, height), interpolation=cv2.INTER_NEAREST)
+
+    segmentation = np.zeros((height, width, n_classes), dtype=np.float32)
+    for class_index in range(n_classes):
+        segmentation[:, :, class_index] = (mask == class_index).astype(np.float32)
+
+    if no_reshape:
+        return segmentation
+    return np.reshape(segmentation, (width * height, n_classes))
+
+
+def image_segmentation_generator(
+    images_path: str,
+    segs_path: str,
+    batch_size: int,
+    n_classes: int,
+    input_height: int,
+    input_width: int,
+    output_height: int,
+    output_width: int,
+    do_augment: bool = False,
+    augmentation_name: str = "aug_all",
+):
+    """Yield randomized image and one-hot mask batches for model training."""
+    image_mask_pairs = get_pairs_from_paths(images_path, segs_path)
+    if not image_mask_pairs:
+        raise DataLoaderError("No matched image-mask pairs are available for training.")
+
+    random.shuffle(image_mask_pairs)
+    pair_cycle = itertools.cycle(image_mask_pairs)
 
     while True:
-        X = []
-        Y = []
+        images = []
+        segmentations = []
         for _ in range(batch_size):
-            im, seg = next(zipped)
-
-            im = cv2.imread(im, 1)
-            seg = cv2.imread(seg, 1)
+            image_path, segmentation_path = next(pair_cycle)
+            image = _load_bgr_image(image_path)
+            segmentation = _load_mask(segmentation_path)
 
             if do_augment:
-                im, seg[:, :, 0] = augment_seg(im, seg[:, :, 0],
-                                               augmentation_name)
+                image, segmentation = augment_seg(image, segmentation, augmentation_name)
 
-            X.append(get_image_array(im, input_width,
-                                     input_height, ordering=IMAGE_ORDERING))
-            Y.append(get_segmentation_array(
-                seg, n_classes, output_width, output_height))
+            images.append(
+                get_image_array(
+                    image,
+                    input_width,
+                    input_height,
+                    ordering=IMAGE_ORDERING,
+                )
+            )
+            segmentations.append(
+                get_segmentation_array(segmentation, n_classes, output_width, output_height)
+            )
 
-        yield np.array(X), np.array(Y)
+        yield np.array(images), np.array(segmentations)
+
+
+def verify_segmentation_dataset(
+    images_path: str, segs_path: str, n_classes: int, show_all_errors: bool = False
+) -> bool:
+    """Verify file pairing, spatial dimensions, and class-index ranges.
+
+    Validation errors raise ``DataLoaderError`` so training never continues with
+    a partially valid dataset.
+    """
+    if n_classes <= 0:
+        raise DataLoaderError("n_classes must be greater than zero.")
+
+    image_mask_pairs = get_pairs_from_paths(images_path, segs_path)
+    if not image_mask_pairs:
+        raise DataLoaderError(
+            f"No matched image-mask pairs found in {images_path} and {segs_path}."
+        )
+
+    errors = []
+    for image_path, segmentation_path in tqdm(image_mask_pairs):
+        image = _load_bgr_image(image_path)
+        segmentation = _load_mask(segmentation_path)
+
+        if image.shape[:2] != segmentation.shape[:2]:
+            errors.append(
+                f"Image and mask dimensions differ: {image_path} "
+                f"({image.shape[:2]}) vs {segmentation_path} ({segmentation.shape[:2]})"
+            )
+        elif int(np.max(segmentation)) >= n_classes:
+            errors.append(
+                f"Mask class index out of range in {segmentation_path}: "
+                f"expected 0-{n_classes - 1}, found {int(np.max(segmentation))}"
+            )
+
+        if errors and not show_all_errors:
+            break
+
+    if errors:
+        raise DataLoaderError("Dataset validation failed:\n- " + "\n- ".join(errors))
+
+    print("Dataset verified.")
+    return True

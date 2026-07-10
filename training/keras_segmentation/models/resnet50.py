@@ -1,7 +1,16 @@
 import keras
-from keras.models import *
-from keras.layers import *
 from keras import layers
+from keras.layers import (
+    Activation,
+    AveragePooling2D,
+    BatchNormalization,
+    Conv2D,
+    Input,
+    Lambda,
+    MaxPooling2D,
+    ZeroPadding2D,
+)
+from keras.models import Model
 
 # Source:
 # https://github.com/fchollet/deep-learning-models/blob/master/resnet50.py

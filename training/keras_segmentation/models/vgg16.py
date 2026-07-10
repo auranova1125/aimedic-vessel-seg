@@ -1,6 +1,6 @@
 import keras
-from keras.models import *
-from keras.layers import *
+from keras.layers import Conv2D, Input, MaxPooling2D
+from keras.models import Model
 
 from .config import IMAGE_ORDERING
 

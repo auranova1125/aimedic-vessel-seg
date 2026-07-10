@@ -1,7 +1,14 @@
-from keras.models import *
-from keras.layers import *
-import keras.backend as K
 import keras
+import keras.backend as K
+from keras.layers import (
+    Activation,
+    BatchNormalization,
+    Conv2D,
+    DepthwiseConv2D,
+    Input,
+    ZeroPadding2D,
+)
+from keras.models import Model
 
 from .config import IMAGE_ORDERING
 

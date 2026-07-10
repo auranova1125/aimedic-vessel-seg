@@ -1,13 +1,16 @@
-#!/usr/bin/env python
-
 import random
 
-import numpy as np
 import cv2
+import numpy as np
 
 from .augmentation import augment_seg
-from .data_loader import \
-    get_pairs_from_paths, DATA_LOADER_SEED, class_colors, DataLoaderError
+from .data_loader import (
+    CLASS_COLORS,
+    DATA_LOADER_SEED,
+    DataLoaderError,
+    get_class_colors,
+    get_pairs_from_paths,
+)
 
 random.seed(DATA_LOADER_SEED)
 
@@ -41,7 +44,7 @@ def visualize_segmentation_dataset(images_path, segs_path, n_classes,
                             ignore_non_matching=ignore_non_matching)
 
         # Get the colors for the classes
-        colors = class_colors
+        colors = get_class_colors(n_classes, CLASS_COLORS)
 
         print("Please press any key to display the next image")
         for im_fn, seg_fn in img_seg_pairs:
@@ -70,7 +73,7 @@ def visualize_segmentation_dataset_one(images_path, segs_path, n_classes,
                                 images_path, segs_path,
                                 ignore_non_matching=ignore_non_matching)
 
-    colors = class_colors
+    colors = get_class_colors(n_classes, CLASS_COLORS)
 
     im_fn, seg_fn = random.choice(img_seg_pairs)
 

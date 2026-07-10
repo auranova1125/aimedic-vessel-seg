@@ -1,5 +1,5 @@
-from keras.models import *
-from keras.layers import *
+from keras.layers import Add, Conv2D, Conv2DTranspose, Cropping2D, Dropout
+from keras.models import Model
 
 from .config import IMAGE_ORDERING
 from .model_utils import get_segmentation_model

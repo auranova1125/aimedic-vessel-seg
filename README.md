@@ -1,114 +1,120 @@
 # AIMedic Vessel Segmentation
 
-RCA angiography frame에서 혈관 영역과 입구/출구 지점을 분할하기 위한 프로젝트입니다.
+This project segments right coronary artery (RCA) angiography frames into four
+classes: background, vessel, vessel endpoint, and vessel entrance. The primary
+pipeline prepares color-coded annotations, trains a ResNet50 U-Net model, and
+writes colorized segmentation results for individual or directory-based
+inference.
 
-
-## 구성 개요
+## Project Layout
 
 ```text
 aimedic_vessel_segmentation/
 ├── data/
-│   ├── README.md             # data layout and file correspondence
+│   ├── README.md                 # Expected dataset layout and matching rules
 │   ├── RCA_train/
-│   │   ├── image/             # angiography frame
-│   │   ├── image_processed/   # 256x256 학습 입력
-│   │   ├── label_r/           # red vessel annotation
-│   │   ├── label_b_g/         # blue endpoint / green entrance annotation
-│   │   └── gt/                # class-index mask
+│   │   ├── image/                # Raw angiography frames
+│   │   ├── label_r/              # Red vessel annotations
+│   │   ├── label_b_g/            # Blue endpoint and green entrance annotations
+│   │   ├── image_processed/      # Generated 256x256 training frames
+│   │   └── gt/                   # Generated class-index masks
 │   └── RCA_test/
-│       └── image/             # inference input frames
+│       └── image/                # Inference input frames
 ├── training/
-│   ├── prepare_rca_dataset.py # 라벨 변환 및 이미지 resize
-│   ├── train_rca_unet.py      # ResNet50-UNet 학습
-│   ├── predict_rca_unet.py    # 체크포인트 추론
-│   ├── checks/RCA/            # Keras checkpoint prefix
-│   └── keras_segmentation/    # 학습/추론에 사용하는 segmentation 코드
+│   ├── preprocessing.py          # Shared resize and histogram equalization
+│   ├── prepare_rca_dataset.py    # Dataset validation and mask generation
+│   ├── train_rca_unet.py         # ResNet50 U-Net training entry point
+│   ├── predict_rca_unet.py       # Checkpoint inference entry point
+│   ├── checks/RCA/               # Default checkpoint prefix directory
+│   └── keras_segmentation/       # Model, data loading, training, and prediction utilities
 ├── references/
-│   └── dl_private_sources/    # stacked-volume 기반 참고 실험
+│   └── dl_private_sources/       # Independent stacked-volume experiment code
 └── requirements.txt
 ```
 
-## 코드 흐름
+Image data and model parameters are excluded from Git. The `.gitkeep` files
+preserve the required data directory structure. See [data/README.md](data/README.md)
+for the complete input layout and filename rules.
 
-```text
-RCA_train/image
-RCA_train/label_r
-RCA_train/label_b_g
-        |
-        v
-training/prepare_rca_dataset.py
-        |
-        v
-RCA_train/image_processed
-RCA_train/gt
-        |
-        v
-training/train_rca_unet.py
-        |
-        v
-training/checks/RCA/
-        |
-        v
-training/predict_rca_unet.py
-```
+## Class Definition
 
-`data/README.md`에는 원본 이미지, 색상 라벨, 전처리 결과, class-index mask의
-역할과 파일명 대응 규칙을 별도로 설명해 두었습니다. 이미지와 라벨 파일은
-저장소에 포함하지 않지만, `.gitkeep` 파일로 필요한 폴더 구조는 유지합니다.
+The preparation script reads BGR color annotations and produces one
+single-channel mask per frame.
 
-## 환경 설치
+| Class index | Annotation | Visualization color |
+| --- | --- | --- |
+| `0` | Background | Black |
+| `1` | Red vessel label | Red |
+| `2` | Blue endpoint on a vessel | Blue |
+| `3` | Green entrance on a vessel | Green |
+
+Endpoint and entrance pixels are assigned only where the red vessel annotation
+is present. The script rejects missing, extra, or duplicate filename stems
+before creating training outputs.
+
+## Environment
+
+Create a Python environment and install the project dependencies:
 
 ```bash
-cd aimedic_vessel_segmentation
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-TensorFlow/Keras는 Python 버전과 OS에 따라 설치 조합이 민감합니다. 먼저 현재 환경에서 설치 가능한 TensorFlow 버전을 맞춘 뒤 실행하는 편이 좋습니다.
+The project uses TensorFlow and standalone Keras. Select versions that are
+compatible with the local Python version and available accelerator drivers.
 
-## 데이터 준비
+## Data Preparation
+
+Place each raw frame and its two annotation files under `data/RCA_train` with
+the same filename stem. The accepted extensions are `.bmp`, `.jpeg`, `.jpg`,
+and `.png`.
 
 ```bash
 python training/prepare_rca_dataset.py --train-dir data/RCA_train
 ```
 
-라벨 색상은 다음 의미로 사용됩니다.
+For every input frame, the command performs the following operations:
 
-- red: vessel
-- blue: vessel endpoint
-- green: vessel entrance
+1. Verifies one-to-one matching between `image`, `label_r`, and `label_b_g`.
+2. Resizes the frame to `256x256`, normalizes it to `uint8`, and applies
+   histogram equalization to the luminance channel.
+3. Resizes the annotation images with nearest-neighbor interpolation.
+4. Writes the prepared frame to `image_processed/<stem>.bmp`.
+5. Writes the class-index mask to `gt/<stem>.bmp`.
 
-생성되는 `gt/` mask class는 다음과 같습니다.
+Histogram equalization is applied to angiography frames only. Labels remain
+class-index data and are never filtered or interpolated with non-nearest-neighbor
+operations.
 
-- `0`: background
-- `1`: vessel only
-- `2`: endpoint on vessel
-- `3`: entrance on vessel
+## Model and Training
 
-학습에서는 `image_processed/`와 `gt/`의 파일 stem이 서로 같아야 합니다. 예를 들어 `image_processed/K02001RCA00008.bmp`에는 `gt/K02001RCA00008.bmp`가 대응됩니다.
-
-## 학습
+`training/train_rca_unet.py` builds the existing `resnet50_unet` model from
+`training/keras_segmentation`. It uses a ResNet50 encoder, U-Net decoder,
+four-class softmax output, and categorical cross-entropy loss.
 
 ```bash
 python training/train_rca_unet.py \
   --train-dir data/RCA_train \
   --checkpoints-path training/checks/RCA/ \
   --epochs 1 \
-  --batch-size 1 \
-  --steps-per-epoch 892
+  --batch-size 1
 ```
 
-빠르게 실행 여부만 확인하려면 `--steps-per-epoch 1`처럼 줄여서 시도할 수 있습니다.
+The script validates that `image_processed` and `gt` have identical filename
+stems, matching spatial dimensions, and mask values in the range `0` to `3`.
+When `--steps-per-epoch` is omitted, it is calculated from the number of
+matched image-mask pairs and the batch size. Set `--gpu` only when a specific
+`CUDA_VISIBLE_DEVICES` value is required; use `--gpu ''` for CPU-only execution.
 
-기본 설정:
+Training writes a checkpoint configuration to
+`training/checks/RCA/_config.json` and saves weights using numeric suffixes,
+such as `training/checks/RCA/.0`.
 
-- model: `resnet50_unet`
-- input size: `256x256`
-- classes: `4`
-- checkpoint prefix: `training/checks/RCA/`
+## Inference
 
-## 추론
+Put test frames in `data/RCA_test/image` and run:
 
 ```bash
 python training/predict_rca_unet.py \
@@ -117,28 +123,44 @@ python training/predict_rca_unet.py \
   --checkpoints-path training/checks/RCA/
 ```
 
-`keras_segmentation` 코드는 checkpoint path를 디렉터리라기보다 파일 prefix처럼 사용합니다. 이 프로젝트에서는 `training/checks/RCA/` 형태를 기본값으로 둡니다.
+Inference reads every supported image extension, creates the output directory
+when necessary, resizes each frame to the model input shape, and applies the
+same luminance histogram equalization used during data preparation. Each output
+is a colorized BGR segmentation image written with the input filename.
 
-## 주요 파일
+## Main Code Flow
 
-- `training/prepare_rca_dataset.py`: 색상 annotation을 class-index mask로 변환하고 이미지를 256x256으로 맞춥니다.
-- `training/train_rca_unet.py`: RCA 학습 데이터를 읽어 `resnet50_unet` 모델을 학습합니다.
-- `training/predict_rca_unet.py`: checkpoint를 불러와 테스트 이미지에 대한 mask를 저장합니다.
-- `training/keras_segmentation/`: 모델, data loader, train/predict 유틸리티가 들어 있습니다.
-- `references/dl_private_sources/`: 2D RCA pipeline과 별개로, stacked slice 입력을 다루는 참고 실험 코드입니다.
+```text
+RCA_train/image + label_r + label_b_g
+                |
+                v
+training/prepare_rca_dataset.py
+                |
+                v
+RCA_train/image_processed + RCA_train/gt
+                |
+                v
+training/train_rca_unet.py
+                |
+                v
+training/checks/RCA/_config.json + numbered weight files
+                |
+                v
+training/predict_rca_unet.py
+                |
+                v
+testing/outputs/RCA/<input filename>
+```
 
-## 작업 맥락
+## Additional Experiment Code
 
-이 프로젝트의 관심사는 단순 vessel/background 분할보다 조금 더 구체적입니다.
+`references/dl_private_sources` contains a separate TensorFlow experiment for
+stacked-volume segmentation and deblurring. Its README documents that code and
+its execution paths independently. It is not required for the RCA 2D training
+and inference commands above.
 
-- RCA 혈관 영역을 안정적으로 분리하기
-- 혈관 입구와 출구를 따로 라벨링해 후속 분석에 활용하기
-- false positive를 줄이고 배경 구조와 구분하기
-- annotation 폴더와 학습 입력을 일관된 형태로 관리하기
+## Data Notes
 
-## 한계
-
-- 현재 포함된 데이터는 샘플 수준입니다. (의료 데이터의 권한 문제)
-- 전체 학습 재현에는 전체 RCA 데이터셋이 필요합니다.
-- TensorFlow/Keras 버전 차이에 따라 일부 API 조정이 필요할 수 있습니다.
-- `references/dl_private_sources/`는 같은 주제의 참고 실험이지만, 메인 RCA 2D 학습 흐름과 직접 연결되지는 않습니다.
+The repository contains no medical images, annotations, or trained weight
+files. A full training run therefore requires an authorized RCA dataset with
+the directory structure described in [data/README.md](data/README.md).

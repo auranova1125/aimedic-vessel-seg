@@ -1,9 +1,11 @@
-import json
-from .data_utils.data_loader import image_segmentation_generator, \
-    verify_segmentation_dataset
 import glob
+import json
+import os
+
 import six
 from keras.callbacks import Callback
+
+from .data_utils.data_loader import image_segmentation_generator, verify_segmentation_dataset
 
 
 def find_latest_checkpoint(checkpoints_path, fail_safe=True):
@@ -14,7 +16,9 @@ def find_latest_checkpoint(checkpoints_path, fail_safe=True):
     # Get all matching files
     all_checkpoint_files = glob.glob(checkpoints_path + ".*")
     # Filter out entries where the epoc_number part is pure number
-    all_checkpoint_files = list(filter(lambda f: get_epoch_number_from_path(f).isdigit(), all_checkpoint_files))
+    all_checkpoint_files = list(
+        filter(lambda path: get_epoch_number_from_path(path).isdigit(), all_checkpoint_files)
+    )
     if not len(all_checkpoint_files):
         # The glob list is empty, don't have a checkpoints_path
         if not fail_safe:
@@ -103,6 +107,7 @@ def train(model,
                       metrics=['accuracy'])
 
     if checkpoints_path is not None:
+        os.makedirs(os.path.dirname(checkpoints_path) or ".", exist_ok=True)
         with open(checkpoints_path+"_config.json", "w") as f:
             json.dump({
                 "model_class": model.model_name,
@@ -126,16 +131,10 @@ def train(model,
 
     if verify_dataset:
         print("Verifying training dataset")
-        verified = verify_segmentation_dataset(train_images,
-                                               train_annotations,
-                                               n_classes)
-        assert verified
+        verify_segmentation_dataset(train_images, train_annotations, n_classes)
         if validate:
             print("Verifying validation dataset")
-            verified = verify_segmentation_dataset(val_images,
-                                                   val_annotations,
-                                                   n_classes)
-            assert verified
+            verify_segmentation_dataset(val_images, val_annotations, n_classes)
 
     train_gen = image_segmentation_generator(
         train_images, train_annotations,  batch_size,  n_classes,
