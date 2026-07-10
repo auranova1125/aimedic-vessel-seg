@@ -8,6 +8,7 @@ RCA angiography frame에서 혈관 영역과 입구/출구 지점을 분할하�
 ```text
 aimedic_vessel_segmentation/
 ├── data/
+│   ├── README.md             # data layout and file correspondence
 │   ├── RCA_train/
 │   │   ├── image/             # angiography frame
 │   │   ├── image_processed/   # 256x256 학습 입력
@@ -15,6 +16,7 @@ aimedic_vessel_segmentation/
 │   │   ├── label_b_g/         # blue endpoint / green entrance annotation
 │   │   └── gt/                # class-index mask
 │   └── RCA_test/
+│       └── image/             # inference input frames
 ├── training/
 │   ├── prepare_rca_dataset.py # 라벨 변환 및 이미지 resize
 │   ├── train_rca_unet.py      # ResNet50-UNet 학습
@@ -23,8 +25,7 @@ aimedic_vessel_segmentation/
 │   └── keras_segmentation/    # 학습/추론에 사용하는 segmentation 코드
 ├── references/
 │   └── dl_private_sources/    # stacked-volume 기반 참고 실험
-├── requirements.txt
-└── PROJECT_NOTES.md
+└── requirements.txt
 ```
 
 ## 코드 흐름
@@ -50,6 +51,10 @@ training/checks/RCA/
         v
 training/predict_rca_unet.py
 ```
+
+`data/README.md`에는 원본 이미지, 색상 라벨, 전처리 결과, class-index mask의
+역할과 파일명 대응 규칙을 별도로 설명해 두었습니다. 이미지와 라벨 파일은
+저장소에 포함하지 않지만, `.gitkeep` 파일로 필요한 폴더 구조는 유지합니다.
 
 ## 환경 설치
 
