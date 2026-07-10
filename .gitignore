@@ -1,2 +1,20 @@
 *.pyc
 .DS_Store
+
+# Local image datasets
+data/**/*.bmp
+data/**/*.jpeg
+data/**/*.jpg
+data/**/*.png
+data/**/*.tif
+data/**/*.tiff
+
+# Local model parameters and training checkpoints
+weights/**/*.pkl
+training/checks/**/*.4
+training/checks/**/*.ckpt*
+training/checks/**/*.data-*
+training/checks/**/*.h5
+training/checks/**/*.index
+training/checks/**/*.keras
+training/checks/**/*.meta
