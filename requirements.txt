@@ -1,0 +1,13 @@
+# Main RCA vessel segmentation pipeline.
+numpy
+opencv-python
+tqdm
+six
+imgaug
+
+# Pick a TensorFlow/Keras pair compatible with your local Python version.
+tensorflow
+keras
+
+# Scripts under references/dl_private_sources/tf2_ref use PIL.
+Pillow

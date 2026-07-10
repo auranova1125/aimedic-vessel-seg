@@ -1,0 +1,10 @@
+.vscode/
+.DS_Store
+dataset/
+__pycache__/
+.idea/
+backup/
+outputs/
+
+*.pyc
+.data.py.swp
